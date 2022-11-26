@@ -7,12 +7,12 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import transforms, datasets
 from tqdm import tqdm
-
-from mobileNet_v2 import MobileNetV2
+# 通过 import torchvision.models 下载pth文件
+from mobilenet_v2 import MobileNetV2
 
 
 def main():
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
     print("using {} device.".format(device))
 
     batch_size = 16
@@ -29,7 +29,7 @@ def main():
                                    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])}
 
     data_root = os.path.abspath(os.path.join(os.getcwd(), "../.."))  # get data root path
-    image_path = os.path.join(data_root, "data_set", "flower_data")  # flower data set path
+    image_path = os.path.join(data_root, "PycharmProjects/DataSet", "flower_data")  # flower data set path
     assert os.path.exists(image_path), "{} path does not exist.".format(image_path)
     train_dataset = datasets.ImageFolder(root=os.path.join(image_path, "train"),
                                          transform=data_transform["train"])
@@ -64,7 +64,6 @@ def main():
     net = MobileNetV2(num_classes=5)
 
     # load pretrain weights
-    # download url: https://download.pytorch.org/models/mobilenet_v2-b0353104.pth
     model_weight_path = "./mobilenet_v2.pth"
     assert os.path.exists(model_weight_path), "file {} dose not exist.".format(model_weight_path)
     pre_weights = torch.load(model_weight_path, map_location='cpu')

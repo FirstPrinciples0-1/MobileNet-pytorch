@@ -6,11 +6,11 @@ from PIL import Image
 from torchvision import transforms
 import matplotlib.pyplot as plt
 
-from mobileNet_v2 import MobileNetV2
+from mobilenet_v2 import MobileNetV2
 
 
 def main():
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
 
     data_transform = transforms.Compose(
         [transforms.Resize(256),
@@ -19,7 +19,7 @@ def main():
          transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
 
     # load image
-    img_path = "../tulip.jpg"
+    img_path = "/Users/liupeng/PycharmProjects/DataSet/flower_data/val/sunflowers/175638423_058c07afb9.jpg"
     assert os.path.exists(img_path), "file: '{}' dose not exist.".format(img_path)
     img = Image.open(img_path)
     plt.imshow(img)
