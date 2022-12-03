@@ -19,12 +19,11 @@ def _make_divisible(ch, divisor=8, min_ch=None):
 
 ## 卷积/BN/Relu6，继承自nn.Sequential
 class ConvBNReLU(nn.Sequential):
-    # groups : 1,普通卷积；in_channel，dw卷积
+    # groups: 1,普通卷积；in_channel，dw卷积
     def __init__(self, in_channel, out_channel, kernel_size=3, stride=1, groups=1):
         # same卷积
         padding = (kernel_size - 1) // 2
         super(ConvBNReLU, self).__init__(
-            # 不使用偏置，因为BN，偏置没有用
             nn.Conv2d(in_channel, out_channel, kernel_size, stride, padding, groups=groups, bias=False),
             nn.BatchNorm2d(out_channel),
             nn.ReLU6(inplace=True)
@@ -66,10 +65,10 @@ class InvertedResidual(nn.Module):
             return self.conv(x)
 
 # 模型，继承自nn.Module
-class MobileNetV2(nn.Module):
+class mobilenet_v2(nn.Module):
     # alpha 超参，控制channal的倍率
     def __init__(self, num_classes=1000, alpha=1.0, round_nearest=8):
-        super(MobileNetV2, self).__init__()
+        super(mobilenet_v2, self).__init__()
         block = InvertedResidual
         # channel设置为8的整数倍，猜测跟CPU或者GPU的并行处理有关
         input_channel = _make_divisible(32 * alpha, round_nearest)

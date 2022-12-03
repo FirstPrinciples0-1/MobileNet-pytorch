@@ -6,6 +6,7 @@ from torch.nn import functional as F
 from functools import partial
 
 
+# 调整channel为8的整数倍
 def _make_divisible(ch, divisor=8, min_ch=None):
     """
     This function is taken from the original tf repo.
@@ -22,47 +23,49 @@ def _make_divisible(ch, divisor=8, min_ch=None):
     return new_ch
 
 
+# 卷积+BN+激活函数，继承自nn.Sequential
 class ConvBNActivation(nn.Sequential):
     def __init__(self,
                  in_planes: int,
                  out_planes: int,
                  kernel_size: int = 3,
                  stride: int = 1,
-                 groups: int = 1,
-                 norm_layer: Optional[Callable[..., nn.Module]] = None,
-                 activation_layer: Optional[Callable[..., nn.Module]] = None):
+                 groups: int = 1,# groups: 1,普通卷积；in_channel，dw卷积
+                 norm_layer: Optional[Callable[..., nn.Module]] = None, # BN层
+                 activation_layer: Optional[Callable[..., nn.Module]] = None): # 激活层
         padding = (kernel_size - 1) // 2
         if norm_layer is None:
-            norm_layer = nn.BatchNorm2d
+            norm_layer = nn.BatchNorm2d # 默认BN
         if activation_layer is None:
-            activation_layer = nn.ReLU6
+            activation_layer = nn.ReLU6 # 默认RELU6
         super(ConvBNActivation, self).__init__(nn.Conv2d(in_channels=in_planes,
                                                          out_channels=out_planes,
                                                          kernel_size=kernel_size,
                                                          stride=stride,
                                                          padding=padding,
                                                          groups=groups,
-                                                         bias=False),
-                                               norm_layer(out_planes),
-                                               activation_layer(inplace=True))
+                                                         bias=False), # 卷积
+                                               norm_layer(out_planes), # BN
+                                               activation_layer(inplace=True)) # 激活
 
-
+# SE模块（注意力机制模块）
 class SqueezeExcitation(nn.Module):
-    def __init__(self, input_c: int, squeeze_factor: int = 4):
+    def __init__(self, input_c: int, squeeze_factor: int = 4): # input_c 输入通道数； squeeze_factor = 4 输入特征通道的1/4
         super(SqueezeExcitation, self).__init__()
-        squeeze_c = _make_divisible(input_c // squeeze_factor, 8)
-        self.fc1 = nn.Conv2d(input_c, squeeze_c, 1)
-        self.fc2 = nn.Conv2d(squeeze_c, input_c, 1)
+        squeeze_c = _make_divisible(input_c // squeeze_factor, 8) # 调整通道为8的整数倍
+        self.fc1 = nn.Conv2d(input_c, squeeze_c, 1) # 1*1的卷积相当于全连接，输入input_c，输出1/4 input_c
+        self.fc2 = nn.Conv2d(squeeze_c, input_c, 1) # 输入1/4 input_c，输出input_c
 
-    def forward(self, x: Tensor) -> Tensor:
-        scale = F.adaptive_avg_pool2d(x, output_size=(1, 1))
-        scale = self.fc1(scale)
-        scale = F.relu(scale, inplace=True)
-        scale = self.fc2(scale)
-        scale = F.hardsigmoid(scale, inplace=True)
-        return scale * x
+    def forward(self, x: Tensor) -> Tensor: # 正向传播的过程
+        scale = F.adaptive_avg_pool2d(x, output_size=(1, 1)) # 全局平均池化，将每一个通道特征输出为1*1的特征
+        scale = self.fc1(scale) # 1*1卷积
+        scale = F.relu(scale, inplace=True) # relu激活
+        scale = self.fc2(scale) # 1*1卷积
+        scale = F.hardsigmoid(scale, inplace=True) # hardsigmoid激活
+        return scale * x # 每一个通道特征 * 通道权重
 
 
+# 倒残差结构配置
 class InvertedResidualConfig:
     def __init__(self,
                  input_c: int,
@@ -72,35 +75,38 @@ class InvertedResidualConfig:
                  use_se: bool,
                  activation: str,
                  stride: int,
-                 width_multi: float):
+                 width_multi: float): # α参数
         self.input_c = self.adjust_channels(input_c, width_multi)
         self.kernel = kernel
         self.expanded_c = self.adjust_channels(expanded_c, width_multi)
         self.out_c = self.adjust_channels(out_c, width_multi)
         self.use_se = use_se
-        self.use_hs = activation == "HS"  # whether using h-swish activation
+        self.use_hs = activation == "HS"  # Hardswish 或者 Relu（默认）
         self.stride = stride
 
+    # 调整channel
     @staticmethod
     def adjust_channels(channels: int, width_multi: float):
         return _make_divisible(channels * width_multi, 8)
 
-
+# 倒残差结构，继承自nn.Module
 class InvertedResidual(nn.Module):
     def __init__(self,
-                 cnf: InvertedResidualConfig,
-                 norm_layer: Callable[..., nn.Module]):
+                 cnf: InvertedResidualConfig, # 倒残差配置
+                 norm_layer: Callable[..., nn.Module]): # BN
         super(InvertedResidual, self).__init__()
 
-        if cnf.stride not in [1, 2]:
+        if cnf.stride not in [1, 2]: # stride 只能为1和2
             raise ValueError("illegal stride value.")
 
+        # short_cut连接，只有当stride=1以及输入输出channal一致的情况下才用
         self.use_res_connect = (cnf.stride == 1 and cnf.input_c == cnf.out_c)
 
         layers: List[nn.Module] = []
+        #  Hardswish 或者 Relu（默认）pytorch 1.7以上才有Hardswish
         activation_layer = nn.Hardswish if cnf.use_hs else nn.ReLU
 
-        # expand
+        # 1* 1升维：只有expanded channel和input channel相等
         if cnf.expanded_c != cnf.input_c:
             layers.append(ConvBNActivation(cnf.input_c,
                                            cnf.expanded_c,
@@ -108,23 +114,25 @@ class InvertedResidual(nn.Module):
                                            norm_layer=norm_layer,
                                            activation_layer=activation_layer))
 
-        # depthwise
+        # 深度卷积：depthwise
         layers.append(ConvBNActivation(cnf.expanded_c,
                                        cnf.expanded_c,
                                        kernel_size=cnf.kernel,
                                        stride=cnf.stride,
-                                       groups=cnf.expanded_c,
+                                       groups=cnf.expanded_c, # groups 数跟 expanded channel保持一致
                                        norm_layer=norm_layer,
                                        activation_layer=activation_layer))
 
+        # 是否使用se模块
         if cnf.use_se:
             layers.append(SqueezeExcitation(cnf.expanded_c))
 
-        # project
+        # 1 * 1 降维
         layers.append(ConvBNActivation(cnf.expanded_c,
                                        cnf.out_c,
                                        kernel_size=1,
                                        norm_layer=norm_layer,
+                                       # 线性激活
                                        activation_layer=nn.Identity))
 
         self.block = nn.Sequential(*layers)
@@ -133,7 +141,7 @@ class InvertedResidual(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         result = self.block(x)
-        if self.use_res_connect:
+        if self.use_res_connect: # 使用short_cut连接
             result += x
 
         return result
@@ -141,13 +149,16 @@ class InvertedResidual(nn.Module):
 
 class MobileNetV3(nn.Module):
     def __init__(self,
+                 # 倒残差参数列表
                  inverted_residual_setting: List[InvertedResidualConfig],
                  last_channel: int,
+                 # 分类类别个数
                  num_classes: int = 1000,
                  block: Optional[Callable[..., nn.Module]] = None,
                  norm_layer: Optional[Callable[..., nn.Module]] = None):
         super(MobileNetV3, self).__init__()
 
+        # 倒残差参数列表检查
         if not inverted_residual_setting:
             raise ValueError("The inverted_residual_setting should not be empty.")
         elif not (isinstance(inverted_residual_setting, List) and
@@ -182,14 +193,17 @@ class MobileNetV3(nn.Module):
                                        kernel_size=1,
                                        norm_layer=norm_layer,
                                        activation_layer=nn.Hardswish))
+        # 第一个卷积到池化之前的卷积添加到layers中
         self.features = nn.Sequential(*layers)
+        # 平均池化
         self.avgpool = nn.AdaptiveAvgPool2d(1)
+        # 倒数第二个全连接 + hs + droupout + 最后一个全连接
         self.classifier = nn.Sequential(nn.Linear(lastconv_output_c, last_channel),
                                         nn.Hardswish(inplace=True),
                                         nn.Dropout(p=0.2, inplace=True),
                                         nn.Linear(last_channel, num_classes))
 
-        # initial weights
+        # 初始化权重
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out")
@@ -203,10 +217,10 @@ class MobileNetV3(nn.Module):
                 nn.init.zeros_(m.bias)
 
     def _forward_impl(self, x: Tensor) -> Tensor:
-        x = self.features(x)
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        x = self.classifier(x)
+        x = self.features(x) # 平均池化之前
+        x = self.avgpool(x) # 平均池化
+        x = torch.flatten(x, 1) # 展平处理，把1*1的高和宽维度舍弃掉，展平成1维
+        x = self.classifier(x) # 两个全连接
 
         return x
 
@@ -229,7 +243,7 @@ def mobilenet_v3_large(num_classes: int = 1000,
             between C4 and C5 by 2. It is used to reduce the channel redundancy in the
             backbone for Detection and Segmentation.
     """
-    width_multi = 1.0
+    width_multi = 1.0 # α参数
     bneck_conf = partial(InvertedResidualConfig, width_multi=width_multi)
     adjust_channels = partial(InvertedResidualConfig.adjust_channels, width_multi=width_multi)
 

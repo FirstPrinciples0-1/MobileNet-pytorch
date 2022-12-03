@@ -6,7 +6,8 @@ from PIL import Image
 from torchvision import transforms
 import matplotlib.pyplot as plt
 
-from mobilenet_v2 import MobileNetV2
+# from mobilenet_v2 import mobilenet_v2
+from mobilenet_v3 import mobilenet_v3_large
 
 
 def main():
@@ -36,9 +37,11 @@ def main():
         class_indict = json.load(f)
 
     # create model
-    model = MobileNetV2(num_classes=5).to(device)
+    # model = mobilenet_v2(num_classes=5).to(device)
+    model = mobilenet_v3_large(num_classes=5).to(device)
     # load model weights
-    model_weight_path = "./MobileNetV2.pth"
+    # model_weight_path = "./MobileNetV2.pth"
+    model_weight_path = "./MobileNetV3_large.pth"
     model.load_state_dict(torch.load(model_weight_path, map_location=device))
     model.eval()
     with torch.no_grad():
